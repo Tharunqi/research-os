@@ -1,0 +1,21 @@
+services:
+
+  postgres:
+    image: postgres:17
+
+    container_name: researchos-postgres
+
+    environment:
+      POSTGRES_USER: researchos
+      POSTGRES_PASSWORD: researchos
+      POSTGRES_DB: researchos
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+
+volumes:
+  postgres_data:
