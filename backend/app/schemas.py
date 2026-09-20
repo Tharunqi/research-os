@@ -17,6 +17,10 @@ class PaperResult(BaseModel):
     paper_url: str | None
     pdf_url: str | None
 
+class ResearchRequest(BaseModel):
+    question: str
+    project_id: int
+
 
 class ResearchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

@@ -4,7 +4,7 @@ from app.database import SessionLocal
 from app.models import Paper
 
 
-def save_papers(papers):
+def save_papers(papers,project_id):
     db = SessionLocal()
 
     try:
@@ -38,6 +38,7 @@ def save_papers(papers):
                 published=published,
                 paper_url=paper_data["paper_url"],
                 pdf_url=paper_data["pdf_url"],
+                project_id=project_id
             )
 
             db.add(paper)

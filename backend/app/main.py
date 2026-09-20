@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from httpcore2 import request
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import os
@@ -10,7 +11,7 @@ from app.database import SessionLocal
 from app.models import Project
 from app.services.arxiv import search_papers
 from app.services.papers import save_papers
-from app.schemas import ProjectCreate, ResearchResponse
+from app.schemas import ProjectCreate, ResearchResponse,ResearchRequest
 
 
 load_dotenv()
@@ -30,14 +31,6 @@ app = FastAPI()
 client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
-
-
-# --------------------------------------------------
-# 3. Request model
-# --------------------------------------------------
-
-class ResearchRequest(BaseModel):
-    question: str
 
 
 # --------------------------------------------------
@@ -69,13 +62,13 @@ def get_capital(country: str):
     )
 
 
-def search_and_save_papers(query: str, limit: int = 5):
+def search_and_save_papers(project_id: int,query: str, limit: int = 5 ):
     papers = search_papers(
         query=query,
         limit=limit,
     )
-
-    saved_papers = save_papers(papers)
+    
+    saved_papers = save_papers(papers, project_id)
 
     return [
         {
@@ -384,49 +377,24 @@ async def research(request: ResearchRequest):
                 "Tool requested:",
                 function_call.name
             )
+            arguments = json.loads(function_call.arguments)
 
-            arguments = json.loads(
-                function_call.arguments
-            )
-
-            print(
-                "Arguments:",
-                arguments
-            )
-
-
-            # --------------------------------------
-            # Find tool
-            # --------------------------------------
-
-            tool = tool_registry.get(
-                function_call.name
-            )
-
+            tool = tool_registry.get(function_call.name)
 
             if tool is None:
-
-                result = {
-                    "error": (
-                        f"Unknown tool: "
-                        f"{function_call.name}"
-                    )
-                }
-
+                result = {"error": f"Unknown tool: {function_call.name}"}
             else:
-
                 try:
-
-                    result = tool(
-                        **arguments
-                    )
+                    if function_call.name == "search_and_save_papers":
+                        result = tool(
+                            **arguments,
+                            project_id=request.project_id,
+                        )
+                    else:
+                        result = tool(**arguments)
 
                 except Exception as e:
-
-                    result = {
-                        "error": str(e)
-                    }
-
+                    result = {"error": str(e)}
 
             tool_results.append(result)
 
