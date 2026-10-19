@@ -1,17 +1,18 @@
-from fastapi import FastAPI
+from fastapi import FastAPI,HTTPException
 from httpcore2 import request
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 import os
 import json
+import re
 
 from dotenv import load_dotenv
 
 from app.database import SessionLocal
-from app.models import Project
+from app.models import Project,Paper,ProjectPaper,ChatSession,ChatMessage
 from app.services.arxiv import search_papers
 from app.services.papers import save_papers
-from app.schemas import ProjectCreate, ResearchResponse,ResearchRequest
+from app.schemas import ProjectCreate, ResearchResponse,ResearchRequest,ChatSessionCreate,ChatSessionResponse,ChatMessageCreate,ChatMessageResponse
 
 
 load_dotenv()
@@ -62,12 +63,28 @@ def get_capital(country: str):
     )
 
 
-def search_and_save_papers(project_id: int,query: str, limit: int = 5 ):
+
+def search_and_save_papers(
+    project_id: int,
+    query: str,
+    limit: int = 5,
+):
+    # If the query contains an arXiv ID, prioritize the ID.
+    match = re.search(
+        r"(?i)(?:arxiv\s*:\s*)?(\d{4}\.\d{4,5}(?:v\d+)?)",
+        query,
+    )
+
+    if match:
+        query = match.group(1)
+
+    print("Final arXiv search query:", query)
+
     papers = search_papers(
         query=query,
         limit=limit,
     )
-    
+
     saved_papers = save_papers(papers, project_id)
 
     return [
@@ -86,6 +103,7 @@ def search_and_save_papers(project_id: int,query: str, limit: int = 5 ):
         }
         for paper in saved_papers
     ]
+
 
 
 # --------------------------------------------------
@@ -378,6 +396,7 @@ async def research(request: ResearchRequest):
                 function_call.name
             )
             arguments = json.loads(function_call.arguments)
+            print("Tool arguments:", arguments)
 
             tool = tool_registry.get(function_call.name)
 
@@ -399,10 +418,16 @@ async def research(request: ResearchRequest):
             tool_results.append(result)
 
 
-            print(
-                "Tool result:",
-                result
-            )
+            print("Tool result:", result)
+
+            if isinstance(result, dict) and "error" in result:
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "tool": function_call.name,
+                        "message": str(result["error"]),
+                    },
+                )
 
 
             # --------------------------------------
@@ -458,6 +483,57 @@ def get_projects():
         ]
     }
 
+@app.get("/projects/{project_id}/papers")
+def get_project_papers(project_id: int):
+    db = SessionLocal()
+
+    try:
+        project = (
+            db.query(Project)
+            .filter(Project.id == project_id)
+            .first()
+        )
+
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found",
+            )
+
+        papers = (
+            db.query(Paper)
+            .join(
+                ProjectPaper,
+                ProjectPaper.paper_id == Paper.id,
+            )
+            .filter(ProjectPaper.project_id == project_id)
+            .order_by(Paper.created_at.desc())
+            .all()
+        )
+
+        return {
+            "project_id": project_id,
+            "papers": [
+                {
+                    "id": paper.id,
+                    "arxiv_id": paper.arxiv_id,
+                    "title": paper.title,
+                    "abstract": paper.abstract,
+                    "authors": paper.authors,
+                    "published": (
+                        paper.published.isoformat()
+                        if paper.published
+                        else None
+                    ),
+                    "paper_url": paper.paper_url,
+                    "pdf_url": paper.pdf_url,
+                }
+                for paper in papers
+            ],
+        }
+
+    finally:
+        db.close()
 
 @app.post("/projects")
 def create_project(
@@ -483,3 +559,161 @@ def create_project(
         "description": project.description,
         "created_at": project.created_at,
     }
+
+@app.post(
+    "/projects/{project_id}/chats",
+    response_model=ChatSessionResponse,
+    status_code=201,
+)
+def create_chat(
+    project_id: int,
+    chat_data: ChatSessionCreate,
+):
+    db = SessionLocal()
+
+    try:
+        project = (
+            db.query(Project)
+            .filter(Project.id == project_id)
+            .first()
+        )
+
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found",
+            )
+
+        chat = ChatSession(
+            project_id=project_id,
+            title=chat_data.title,
+        )
+
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+
+        return chat
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+@app.get(
+    "/projects/{project_id}/chats",
+    response_model=list[ChatSessionResponse],
+)
+def get_project_chats(project_id: int):
+    db = SessionLocal()
+
+    try:
+        project = (
+            db.query(Project)
+            .filter(Project.id == project_id)
+            .first()
+        )
+
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found",
+            )
+
+        chats = (
+            db.query(ChatSession)
+            .filter(ChatSession.project_id == project_id)
+            .order_by(ChatSession.created_at.desc())
+            .all()
+        )
+
+        return chats
+
+    finally:
+        db.close()
+
+@app.get(
+    "/chats/{chat_id}/messages",
+    response_model=list[ChatMessageResponse],
+)
+def get_chat_messages(chat_id: int):
+    db = SessionLocal()
+
+    try:
+        chat = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == chat_id)
+            .first()
+        )
+
+        if chat is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Chat not found",
+            )
+
+        messages = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == chat_id)
+            .order_by(ChatMessage.created_at, ChatMessage.id)
+            .all()
+        )
+
+        return messages
+
+    finally:
+        db.close()
+
+
+@app.post(
+    "/chats/{chat_id}/messages",
+    response_model=ChatMessageResponse,
+    status_code=201,
+)
+def create_chat_message(
+    chat_id: int,
+    message_data: ChatMessageCreate,
+):
+    content = message_data.content.strip()
+
+    if not content:
+        raise HTTPException(
+            status_code=422,
+            detail="Message content cannot be empty",
+        )
+
+    db = SessionLocal()
+
+    try:
+        chat = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == chat_id)
+            .first()
+        )
+
+        if chat is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Chat not found",
+            )
+
+        message = ChatMessage(
+            session_id=chat_id,
+            role="user",
+            content=content,
+        )
+
+        db.add(message)
+        db.commit()
+        db.refresh(message)
+
+        return message
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
