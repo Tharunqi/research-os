@@ -188,3 +188,46 @@ class ChatMessage(Base):
     session: Mapped["ChatSession"] = relationship(
         back_populates="messages",
     )
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    id: Mapped[int] = mapped_column(
+        primary_key=True
+    )
+
+    user_key: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False,
+    )
+
+    preferences: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+    )
+
+    interests: Mapped[list] = mapped_column(
+        JSON,
+        default=list,
+        nullable=False,
+    )
+
+    expertise: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
