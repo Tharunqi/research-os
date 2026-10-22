@@ -5,7 +5,7 @@ from openai import AsyncOpenAI
 import os
 import json
 import re
-
+import inspect
 from dotenv import load_dotenv
 
 from app.database import SessionLocal
@@ -15,7 +15,7 @@ from app.services.papers import save_papers
 from app.services.context_builder import build_context
 from app.rag.answer import answer_question
 from app.schemas import ProjectCreate, ResearchResponse,ResearchRequest,ChatSessionCreate,ChatSessionResponse,ChatMessageCreate,ChatMessageResponse
-
+from app.rag.ingestion import ingest_pdf, is_paper_indexed
 
 load_dotenv()
 
@@ -79,53 +79,179 @@ def search_and_save_papers(
         for paper in saved_papers
     ]
 
+def normalize_title(title: str) -> str:
+    return " ".join(title.casefold().split())
 
-def answer_paper_question(
+
+async def resolve_paper_title(paper_title: str, papers: list):
+    """
+    Resolve a user/model-supplied paper title against papers
+    saved in the current project.
+
+    Returns:
+        (paper, None) on a confident match
+        (None, error_dict) when no confident match exists
+    """
+
+    if not papers:
+        return None, {
+            "error": "No papers are saved in this project.",
+            "needs_clarification": True,
+            "candidate_titles": [],
+        }
+
+    # Stage 1: Exact match after case/whitespace normalization.
+    normalized_title = normalize_title(paper_title)
+
+    for paper in papers:
+        if normalize_title(paper.title) == normalized_title:
+            return paper, None
+
+    # Stage 2: Semantic matching using titles and abstracts.
+    candidate_texts = [
+        f"Title: {paper.title}\nAbstract: {paper.abstract or ''}"
+        for paper in papers
+    ]
+
+    embedding_response = await client.embeddings.create(
+        model="text-embedding-3-small",
+        input=[paper_title, *candidate_texts],
+    )
+
+    vectors = [
+        item.embedding
+        for item in embedding_response.data
+    ]
+
+    query_vector = vectors[0]
+
+    def cosine_similarity(a, b):
+        dot_product = sum(x * y for x, y in zip(a, b))
+        norm_a = sum(x * x for x in a) ** 0.5
+        norm_b = sum(y * y for y in b) ** 0.5
+
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+
+        return dot_product / (norm_a * norm_b)
+
+    ranked = sorted(
+        [
+            (
+                cosine_similarity(query_vector, vector),
+                paper,
+            )
+            for paper, vector in zip(papers, vectors[1:])
+        ],
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
+    best_score, best_paper = ranked[0]
+
+    # Conservative initial threshold; we'll tune it using real queries.
+    if best_score < 0.35:
+        return None, {
+            "error": "Could not confidently match the description to a saved paper.",
+            "needs_clarification": True,
+            "candidate_titles": [
+                paper.title for _, paper in ranked[:3]
+            ],
+        }
+
+    # If two papers have similar scores, don't guess.
+    if (
+        len(ranked) > 1
+        and best_score - ranked[1][0] < 0.05
+    ):
+        return None, {
+            "error": "Multiple saved papers may match this description.",
+            "needs_clarification": True,
+            "candidate_titles": [
+                paper.title for _, paper in ranked[:3]
+            ],
+        }
+
+    return best_paper, None
+
+
+async def answer_paper_question(
     question: str,
-    paper_id: int,
-    project_id: int,
+    paper_title: str,
+    project_id: int
 ) -> dict:
-    """Answer a question using evidence retrieved from a project paper."""
-
     db = SessionLocal()
 
     try:
-        paper = (
+        papers = (
             db.query(Paper)
-            .join(
-                ProjectPaper,
-                ProjectPaper.paper_id == Paper.id,
-            )
-            .filter(
-                Paper.id == paper_id,
-                ProjectPaper.project_id == project_id,
-            )
-            .first()
+            .join(ProjectPaper, ProjectPaper.paper_id == Paper.id)
+            .filter(ProjectPaper.project_id == project_id)
+            .all()
+        )
+        # 1. Verify that the paper belongs to this project.
+        paper, resolution_error = await resolve_paper_title(
+            paper_title=paper_title,
+            papers=papers,
         )
 
-        if paper is None:
+        if resolution_error:
+            return resolution_error
+
+        if not paper.pdf_url:
             return {
-                "error": "Paper not found in the specified project."
+                "error": "This paper does not have a PDF URL available.",
+                "paper_title": paper.title,
+                "grounded": False,
             }
 
-        paper_title = paper.title
-        arxiv_id = paper.arxiv_id
+        # 2. Ingest the PDF only if it has not been indexed.
+        if not is_paper_indexed(paper.id, project_id):
+            try:
+                ingestion_result = ingest_pdf(
+                    pdf_url=paper.pdf_url,
+                    paper_id=paper.id,
+                    project_id=project_id,
+                    arxiv_id=paper.arxiv_id,
+                )
+
+                # Check whether ingestion actually produced chunks.
+                if not is_paper_indexed(paper.id, project_id):
+                    return {
+                        "error": (
+                            "The paper could not be indexed successfully. "
+                            "No evidence is available to answer the question."
+                        ),
+                        "paper_title": paper.title,
+                        "ingestion_result": ingestion_result,
+                        "grounded": False,
+                    }
+
+            except Exception as exc:
+                return {
+                    "error": "Failed to ingest the paper PDF.",
+                    "paper_title": paper.title,
+                    "details": str(exc),
+                    "grounded": False,
+                }
+
+        # 3. Retrieve relevant chunks and generate an answer.
+        result = answer_question(
+            question=question,
+            paper_id=paper.id,
+            project_id=project_id,
+        )
+
+        return {
+            "paper_id": paper.id,
+            "paper_title": paper.title,
+            "arxiv_id": paper.arxiv_id,
+            **result,
+        }
 
     finally:
         db.close()
 
-    result = answer_question(
-        question=question,
-        paper_id=paper_id,
-        project_id=project_id,
-    )
-
-    return {
-        "paper_id": paper_id,
-        "title": paper_title,
-        "arxiv_id": arxiv_id,
-        **result,
-    }
 
 
 
@@ -206,12 +332,16 @@ OPENAI_TOOLS = [
                     "type": "string",
                     "description": "The specific question to answer from the paper.",
                 },
-                "paper_id": {
-                    "type": "integer",
-                    "description": "The database ID of the paper to query.",
-                },
+                "paper_title": {
+                    "type": "string",
+                    "description": (
+                        "The canonical title of the paper selected from "
+                        "the current project's saved paper metadata. "
+                        "Never ask the user for a database ID."
+                    )
+                }
             },
-            "required": ["question", "paper_id"],
+            "required": ["question", "paper_title"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -254,6 +384,30 @@ When no tool is needed, answer the user's latest question directly.
 Do not invent paper metadata.
 When presenting discovered papers, include their available
 metadata and links.
+
+
+PAPER-SPECIFIC QUESTIONS — MANDATORY RAG:
+
+When the user asks about the contents of a specific paper, you MUST
+call answer_paper_question before answering. This includes questions
+about methodology, architecture, equations, experiments, results,
+contributions, limitations, assumptions, conclusions, and technical
+details.
+
+This rule applies even when you already know the answer from general
+knowledge or the paper's abstract.
+
+Identify the paper using the current project's saved paper metadata
+and conversation history. Pass its canonical saved title as
+paper_title. Never ask the user for a database ID.
+
+If the paper cannot be identified unambiguously, ask the user which
+paper they mean.
+
+Do not answer a paper-specific question from general knowledge before
+calling the RAG tool. Base the final answer on the tool's returned
+evidence. If the tool cannot find sufficient evidence, say so honestly.
+
 """
 
 
@@ -263,6 +417,7 @@ async def ask_openai(contents):
         instructions=SYSTEM_PROMPT,
         input=contents,
         tools=OPENAI_TOOLS,
+        tool_choice="auto",
     )
 
     return response
@@ -305,8 +460,40 @@ async def generate_final_response(
         "- Include only papers supported by the tool results.\n"
         "- If no papers were retrieved, return an empty papers list.\n"
         "- If the available information is insufficient, say so honestly.\n"
+        "- For paper-specific questions, treat the RAG tool's returned "
+        "evidence as the source of truth.\n"
+        "- If a paper-answer tool result has grounded=false, do not "
+        "answer the paper-specific question from general knowledge. "
+        "Clearly state that sufficient evidence could not be verified.\n"
+        "- If paper retrieval or ingestion returns an error, explain "
+        "the error honestly and do not invent paper-specific findings.\n"
+        "- When grounded=true, base paper-specific claims on the "
+        "tool's answer and available sources. Do not add unsupported "
+        "claims.\n"
     )
+    paper_answer_results = [
+        result
+        for result in tool_results
+        if isinstance(result, dict)
+        and (
+            "grounded" in result
+            or "paper_title" in result
+            or "ingestion_result" in result
+        )
+    ]
 
+    has_ungrounded_paper_result = any(
+        result.get("grounded") is False
+        or "error" in result
+        for result in paper_answer_results
+    )
+    if has_ungrounded_paper_result:
+        prompt += (
+            "\nIMPORTANT: A paper-answer tool returned insufficient "
+            "grounding or an error. Do not answer the paper-specific "
+            "question using general knowledge. Explain the limitation "
+            "clearly and concisely.\n"
+        )
     response = await client.responses.create(
         model="gpt-5.6-luna",
         input=prompt,
@@ -642,6 +829,9 @@ async def research(request: ResearchRequest):
                         )
                     else:
                         result = tool(**arguments)
+                    
+                    if inspect.isawaitable(result):
+                        result = await result
 
                 except Exception as e:
                     result = {"error": str(e)}
@@ -650,17 +840,6 @@ async def research(request: ResearchRequest):
 
 
             print("Tool result:", result)
-
-            if isinstance(result, dict) and "error" in result:
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "tool": function_call.name,
-                        "message": str(result["error"]),
-                    },
-                )
-
-
             # --------------------------------------
             # Send result back to OpenAI
             # --------------------------------------

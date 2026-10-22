@@ -1,4 +1,6 @@
 
+from sqlalchemy import text
+from app.database import engine
 import os
 import tempfile
 from pathlib import Path
@@ -60,6 +62,37 @@ def download_pdf(pdf_url: str) -> Path:
 
     finally:
         response.close()
+
+
+def is_paper_indexed(paper_id: int, project_id: int) -> bool:
+    """
+    Check whether a paper already has indexed chunks
+    for the given project.
+    """
+    with engine.connect() as connection:
+        # The vector table may not exist before the first ingestion.
+        table_exists = connection.execute(
+            text("SELECT to_regclass('public.data_researchos_chunks')")
+        ).scalar_one()
+
+        if table_exists is None:
+            return False
+
+        chunk_count = connection.execute(
+            text("""
+                SELECT COUNT(*)
+                FROM public.data_researchos_chunks
+                WHERE metadata_->>'paper_id' = :paper_id
+                  AND metadata_->>'project_id' = :project_id
+            """),
+            {
+                "paper_id": str(paper_id),
+                "project_id": str(project_id),
+            },
+        ).scalar_one()
+
+        return chunk_count > 0
+
 
 
 def ingest_pdf(
