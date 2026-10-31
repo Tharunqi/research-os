@@ -55,7 +55,9 @@ def answer_question(
             "a page number present in the supplied excerpts. "
             "If the excerpts do not answer the question, say so "
             "clearly. Distinguish explicit findings from your "
-            "interpretation."
+            "interpretation. Format mathematical expressions with TeX "
+            "delimiters: use $...$ inline and $$...$$ on separate lines "
+            "for display equations. Do not leave raw TeX commands un-delimited."
         ),
         input=(
             f"Question:\n{question}\n\n"

@@ -1,9 +1,9 @@
-
-import os
-
-from openai import OpenAI
-
-from app.rag.retrieval import retrieve_chunks
+from app.tools.evidence import (
+    collect_sources,
+    format_single_paper_excerpts,
+    retrieve_paper_chunks,
+)
+from app.tools.generate import generate_from_excerpts
 
 
 def summarize_paper(
@@ -16,13 +16,13 @@ def summarize_paper(
     The summary is generated on demand and is not stored in the database.
     """
 
-    chunks = retrieve_chunks(
+    chunks = retrieve_paper_chunks(
+        paper_id=paper_id,
+        project_id=project_id,
         question=(
             "Summarize the paper's problem, motivation, methodology, "
             "main contributions, experiments, results, and limitations."
         ),
-        paper_id=paper_id,
-        project_id=project_id,
         top_k=top_k,
     )
 
@@ -34,20 +34,7 @@ def summarize_paper(
             "error": "No relevant paper content was found.",
         }
 
-    context_parts = []
-
-    for chunk in chunks:
-        context_parts.append(
-            f"[Page {chunk['page_number']}]\n{chunk['text']}"
-        )
-
-    context = "\n\n".join(context_parts)
-
-    client = OpenAI()
-    model = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
-
-    response = client.responses.create(
-        model=model,
+    summary = generate_from_excerpts(
         instructions=(
             "You are a research assistant summarizing an academic paper. "
             "Use only the supplied excerpts. Do not invent facts or use "
@@ -63,24 +50,14 @@ def summarize_paper(
             "Cite supporting claims using [Page N], where N is a page "
             "number present in the supplied excerpts."
         ),
-        input=(
+        user_input=(
             "Summarize this academic paper using the following excerpts.\n\n"
-            f"Paper excerpts:\n{context}"
+            f"Paper excerpts:\n{format_single_paper_excerpts(chunks)}"
         ),
     )
 
-    sources_by_page = {}
-
-    for chunk in chunks:
-        page = chunk["page_number"]
-        sources_by_page[page] = {
-            "page_number": page,
-            "paper_id": chunk["paper_id"],
-            "arxiv_id": chunk["arxiv_id"],
-        }
-
     return {
-        "summary": response.output_text.strip(),
-        "sources": list(sources_by_page.values()),
+        "summary": summary,
+        "sources": collect_sources(chunks),
         "grounded": True,
     }

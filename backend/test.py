@@ -1,5 +1,5 @@
 
-from app.skills.paper_comparison import compare_papers
+from app.tools.paper_comparison import compare_papers
 
 result = compare_papers(
     paper_ids=[2, 3],  # Replace with two actual paper IDs

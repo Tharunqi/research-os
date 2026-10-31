@@ -127,13 +127,17 @@ def _title_key(title: str) -> str:
     return " ".join(re.findall(r"\w+", title.casefold()))
 
 
-def search_papers(query: str, limit: int = 5) -> list[dict]:
+def search_papers(
+    query: str,
+    limit: int = 5,
+    search_mode: str = "topic",
+) -> list[dict]:
     """
     Search arXiv by exact identifier or title-first text search.
 
     Exact IDs are resolved through id_list, not full-text search.
-    For text queries, exact title matches take precedence over
-    broader title/abstract matches.
+    ``title`` searches stay in the title field. ``topic`` searches fall
+    back to title/abstract matches when the title search has no exact hit.
     """
     query = query.strip()
 
@@ -142,6 +146,8 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
 
     if not 1 <= limit <= 100:
         raise ValueError("limit must be between 1 and 100.")
+    if search_mode not in {"title", "topic"}:
+        raise ValueError("search_mode must be either 'title' or 'topic'.")
 
     # Case 1: The input is an arXiv ID or arXiv URL.
     arxiv_id = normalize_arxiv_id(query)
@@ -193,6 +199,12 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
     # If the title matches exactly, do not mix in related papers.
     if exact_title_results:
         return exact_title_results
+
+    # Resolving a specific requested paper must never turn into a broad
+    # full-text search. That fallback can return papers which only cite the
+    # requested work, and adds a second network request before ingestion.
+    if search_mode == "title":
+        return title_results
 
     # Case 3: No exact title match: fall back to broader search.
     broad_results = _query_api(

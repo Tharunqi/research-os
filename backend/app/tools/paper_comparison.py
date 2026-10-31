@@ -1,9 +1,8 @@
-
-import os
-
-from openai import OpenAI
-
-from app.rag.retrieval import retrieve_chunks
+from app.tools.evidence import (
+    collect_sources,
+    gather_multi_paper_evidence,
+)
+from app.tools.generate import generate_from_excerpts
 
 
 def compare_papers(
@@ -34,64 +33,26 @@ def compare_papers(
             "error": "Duplicate paper IDs were provided.",
         }
 
-    paper_contexts = []
-    all_sources = []
-
-    question = (
-        "Find the paper's research problem, proposed method, "
-        "main contributions, datasets, experimental setup, "
-        "results, baselines, and limitations."
+    evidence = gather_multi_paper_evidence(
+        paper_ids=paper_ids,
+        project_id=project_id,
+        question=(
+            "Find the paper's research problem, proposed method, "
+            "main contributions, datasets, experimental setup, "
+            "results, baselines, and limitations."
+        ),
+        top_k=top_k,
     )
 
-    for paper_id in paper_ids:
-        chunks = retrieve_chunks(
-            question=question,
-            paper_id=paper_id,
-            project_id=project_id,
-            top_k=top_k,
-        )
+    if evidence["error"]:
+        return {
+            "comparison": None,
+            "sources": collect_sources(evidence["chunks"]),
+            "grounded": False,
+            "error": evidence["error"],
+        }
 
-        if not chunks:
-            return {
-                "comparison": None,
-                "sources": all_sources,
-                "grounded": False,
-                "error": (
-                    f"No relevant content was found for paper ID "
-                    f"{paper_id}. Ensure the paper has been indexed."
-                ),
-            }
-
-        excerpts = []
-
-        for chunk in chunks:
-            page = chunk["page_number"]
-            excerpts.append(
-                f"[Paper ID: {paper_id}, Page: {page}]\n"
-                f"{chunk['text']}"
-            )
-
-            source = {
-                "paper_id": paper_id,
-                "page_number": page,
-                "arxiv_id": chunk["arxiv_id"],
-            }
-
-            if source not in all_sources:
-                all_sources.append(source)
-
-        paper_contexts.append(
-            f"=== PAPER ID: {paper_id} ===\n"
-            + "\n\n".join(excerpts)
-        )
-
-    context = "\n\n".join(paper_contexts)
-
-    client = OpenAI()
-    model = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
-
-    response = client.responses.create(
-        model=model,
+    comparison = generate_from_excerpts(
         instructions=(
             "You are an academic research assistant comparing papers. "
             "Use only the supplied excerpts. Never transfer a method, "
@@ -110,15 +71,15 @@ def compare_papers(
             "Cite claims using [Paper ID: X, Page: Y], exactly matching "
             "the identifiers and page numbers in the supplied excerpts."
         ),
-        input=(
+        user_input=(
             "Compare the following academic papers using only the "
             "provided excerpts.\n\n"
-            f"{context}"
+            + "\n\n".join(evidence["contexts"])
         ),
     )
 
     return {
-        "comparison": response.output_text.strip(),
-        "sources": all_sources,
+        "comparison": comparison,
+        "sources": collect_sources(evidence["chunks"]),
         "grounded": True,
     }

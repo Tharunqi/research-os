@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f5f5" />
+    <title>ResearchOS</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: { "[+]": [["$", "$"]] },
+          processEscapes: true,
+        },
+      };
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Project navigation">
+        <a class="brand" href="/" aria-label="ResearchOS home">
+          <span class="brand-mark">R</span>
+          <span>Research<span class="brand-light">OS</span></span>
+        </a>
+
+        <div class="side-section project-section">
+          <div class="section-heading">
+            <span>Workspaces</span>
+            <button class="icon-button glass glass-dark" id="new-project-button" aria-label="Create project" title="Create project">+</button>
+          </div>
+          <div id="project-list" class="nav-list" aria-live="polite"></div>
+        </div>
+
+        <div class="side-section chats-section">
+          <div class="section-heading">
+            <span>Recent chats</span>
+            <button class="icon-button glass glass-dark" id="new-chat-button" aria-label="New chat" title="New chat" disabled>+</button>
+          </div>
+          <div id="chat-list" class="nav-list chat-list" aria-live="polite"></div>
+        </div>
+
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <span>Research workspace</span>
+          <a href="/docs" target="_blank" rel="noreferrer" class="api-link" title="Open API documentation">API ↗</a>
+        </div>
+      </aside>
+
+      <main class="main-column">
+        <header class="topbar">
+          <div class="mobile-brand"><span class="brand-mark">R</span><strong>ResearchOS</strong></div>
+          <div class="breadcrumb" id="breadcrumb">Choose a workspace</div>
+          <button class="compact-library-button glass" id="compact-library-button"><span>▤ Papers</span><span id="compact-paper-count" class="compact-paper-count">0</span></button>
+          <button class="mobile-project-picker" id="mobile-project-picker" aria-expanded="false" aria-controls="mobile-project-menu">Workspaces <span>⌄</span></button>
+          <div class="mobile-project-menu" id="mobile-project-menu" hidden>
+            <div id="mobile-project-list" class="mobile-project-list"></div>
+            <button id="mobile-new-project" class="mobile-new-project">＋ Create workspace</button>
+            <button id="mobile-library-toggle" class="mobile-new-project">▤ View paper library</button>
+          </div>
+          <button class="mobile-chat-picker" id="mobile-chat-picker" aria-expanded="false" aria-controls="mobile-chat-menu">Chats <span>⌄</span></button>
+          <div class="mobile-chat-menu" id="mobile-chat-menu" hidden><div id="mobile-chat-list" class="mobile-project-list"></div></div>
+          <div class="top-actions">
+            <span id="save-status" class="save-status" aria-live="polite"></span>
+            <button class="button button-secondary glass" id="top-new-chat" disabled><span class="button-symbol">＋</span> New chat</button>
+          </div>
+        </header>
+
+        <section class="conversation-area" id="conversation-area">
+          <div id="welcome" class="welcome-card">
+            <div class="eyebrow"><span class="eyebrow-line"></span> YOUR RESEARCH DESK</div>
+            <h1>Make sense of<br /><span>the research.</span></h1>
+            <p class="welcome-copy">Search papers, ask focused questions, and build a clearer picture of your field.</p>
+            <div class="starter-grid" id="starter-grid">
+              <button class="starter-card" data-mode="search">
+                <span class="starter-icon">⌕</span>
+                <span><strong>Find papers</strong><small>Discover and save papers by topic</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+              <button class="starter-card" data-mode="ask">
+                <span class="starter-icon">◌</span>
+                <span><strong>Ask a question</strong><small>Get an answer grounded in a paper</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+              <button class="starter-card" data-mode="summarize">
+                <span class="starter-icon">≡</span>
+                <span><strong>Summarize</strong><small>Get the key ideas from a paper</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+              <button class="starter-card" data-mode="compare">
+                <span class="starter-icon">⇄</span>
+                <span><strong>Compare papers</strong><small>Understand methods and differences</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+              <button class="starter-card" data-mode="extract">
+                <span class="starter-icon">▤</span>
+                <span><strong>Extract results</strong><small>Find metrics, datasets, and findings</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+              <button class="starter-card" data-mode="synthesize">
+                <span class="starter-icon">⌘</span>
+                <span><strong>Synthesize literature</strong><small>Connect themes across papers</small></span>
+                <span class="starter-arrow">↗</span>
+              </button>
+            </div>
+            <p class="welcome-footnote" id="welcome-footnote">Create or select a workspace to get started.</p>
+          </div>
+          <div id="message-list" class="message-list" aria-live="polite" aria-label="Chat messages" hidden></div>
+        </section>
+
+        <footer class="composer-wrap">
+          <form id="composer" class="composer glass" autocomplete="off">
+            <label class="sr-only" for="message-input">Your research question</label>
+            <textarea id="message-input" rows="1" placeholder="Select a workspace to begin…" disabled></textarea>
+            <div class="composer-bottom">
+              <label class="sr-only" for="action-mode">Research action</label>
+              <div class="mode-select-wrap">
+                <span class="mode-spark">✳</span>
+                <select id="action-mode" aria-label="Research action" disabled>
+                  <option value="ask">Ask about a paper</option>
+                  <option value="search">Find papers</option>
+                  <option value="summarize">Summarize a paper</option>
+                  <option value="extract">Extract results</option>
+                  <option value="compare">Compare papers</option>
+                  <option value="synthesize">Synthesize literature</option>
+                </select>
+                <span class="select-chevron">⌄</span>
+              </div>
+              <div class="composer-hint"><kbd>↵</kbd> to send <span>·</span> <kbd>⇧ ↵</kbd> for a new line</div>
+              <button class="send-button glass glass-dark" id="send-button" type="submit" aria-label="Send message" disabled><span>Send</span><span class="send-arrow">↗</span></button>
+            </div>
+          </form>
+          <p class="disclaimer">ResearchOS grounds paper claims in your project library.</p>
+        </footer>
+      </main>
+
+      <aside class="library-panel" aria-label="Project paper library">
+        <div class="library-header">
+          <div>
+            <div class="panel-eyebrow">PROJECT LIBRARY</div>
+            <h2>Papers <span id="paper-count" class="count-pill">0</span></h2>
+          </div>
+          <button class="icon-button glass close-mobile-library" id="close-mobile-library" aria-label="Close paper library">×</button>
+          <button class="icon-button glass" id="refresh-papers" aria-label="Refresh papers" title="Refresh papers" disabled>↻</button>
+        </div>
+        <div class="library-description" id="library-description">Papers discovered in this workspace will appear here.</div>
+        <div id="paper-list" class="paper-list" aria-live="polite">
+          <div class="empty-library">Your saved papers will live here.</div>
+        </div>
+        <div class="library-footer"><span class="library-dot"></span><span>Paper PDFs are indexed for grounded answers</span></div>
+      </aside>
+    </div>
+
+    <dialog id="project-dialog" class="project-dialog">
+      <form id="project-form" method="dialog">
+        <div class="dialog-topline"><span class="dialog-mark">R</span><button class="dialog-close" value="cancel" aria-label="Close">×</button></div>
+        <p class="panel-eyebrow">A NEW RESEARCH SPACE</p>
+        <h2>Create a workspace</h2>
+        <p class="dialog-copy">Keep papers and conversations for a research topic together.</p>
+        <label class="field-label" for="project-name">Workspace name</label>
+        <input id="project-name" name="name" placeholder="e.g. Efficient language models" required maxlength="120" />
+        <label class="field-label" for="project-description">Description <span>(optional)</span></label>
+        <textarea id="project-description" name="description" rows="3" placeholder="What are you investigating?"></textarea>
+        <div class="dialog-actions"><button type="button" class="button button-quiet" id="cancel-project">Cancel</button><button type="submit" class="button button-primary glass glass-dark" id="create-project-submit">Create workspace <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-chtml.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
